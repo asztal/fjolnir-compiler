@@ -1,17 +1,22 @@
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
+
 module CGen
     ( generateC
     , writeEntryPoint
     ) where
 
+import Control.Applicative
 import Control.Monad (forM, when)
-import Control.Monad.Trans (liftIO)
+import Control.Monad.Trans (MonadTrans(..), MonadIO(..))
+import Control.Monad.Writer (WriterT, execWriterT, MonadWriter(tell))
 import Data.List (intercalate)
 import Data.Map (Map)
 import qualified Data.Map as M
+import Data.Sequence (Seq)
+import qualified Data.Sequence as Seq 
 import Data.Set (Set)
 import qualified Data.Set as S
 import System.FilePath (addExtension)
-
 
 import Compiler
 import Module
@@ -20,8 +25,14 @@ import IR
 import Var
 import Types
 
-sampleExp :: Exp Var Fun
-sampleExp = AndE (WordE 2) (OrE (NotE (RealE 7.0)) (IfE (ReadE (LocalVar 5)) (ReadE (RefArgVar 0)) (WordE 6)))
+newtype GenC a = GenC { unGenC :: WriterT (Seq String) Compiler a }
+    deriving (Functor, Monad, Applicative, MonadIO, MonadWriter (Seq String))
+    
+write :: String -> GenC ()
+write = tell . Seq.singleton
+
+genC :: GenC () -> Compiler (Seq String) 
+genC (GenC x) = execWriterT x
 
 writeEntryPoint :: Name -> FunID -> Compiler ()
 writeEntryPoint name funID@(FunID funID') = context $ do    
@@ -87,9 +98,13 @@ genInstr i instruction = "  I" ++ show i ++ ": " ++ f instruction ++ ";\n" where
     f (JumpI l) = "goto I" ++ show l
     f (ConditionalI v l) = "if (" ++ showVar v ++ ") goto I" ++ show l
     f (CallI v f vs vs') = showVar v ++ " = " ++ showFun f ++ "(" ++ intercalate "," (map showRefArg vs ++ map showVar vs') ++ ")"
-    f (CallVI v f vs vs') = showVar v ++ " = ((Value(*)())(loadStef(" ++ showVar f ++ "," ++ show (length vs) ++ "," ++ show (length vs') ++ ")))(" ++ intercalate "," (map showRefArg vs ++ map showVar vs') ++ ")"
+    f (CallVI v f vs vs') = showVar v ++ " = ((" ++ typeSig (length vs, length vs') ++ ")(loadStef(" ++ showVar f ++ "," ++ show (length vs) ++ "," ++ show (length vs') ++ ")))(" ++ intercalate "," (map showRefArg vs ++ map showVar vs') ++ ")"
     f (LoadFunI v f (m,n)) = showVar v ++ " = makeStef(&" ++ showFun f ++ "," ++ show m ++ "," ++ show n ++ ")" 
     f _ = "/* TODO */"
+    
+    typeSig (m,n) = "Value(*)(" ++ intercalate "," (ms ++ ns) ++ ")" where
+        ms = replicate m "Value*"
+        ns = replicate n "Value"
     
     showRefArg :: Var -> String
     showRefArg v = "&" ++ showVar v

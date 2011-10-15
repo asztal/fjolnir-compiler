@@ -155,10 +155,8 @@ generateIR output expr = case expr of
         (map (chr . fromIntegral) (Data.Array.Unboxed.elems s))
     RealE r -> write $ RealI output r
     
-    FunE f arity -> do
-        x <- stackVar
-        -- TODO check arity?
-        write $ LoadFunI x f arity
+    FunE f arity ->
+        write $ LoadFunI output f arity
     
     ReadE v -> write $ AssignI output v
     WriteE v e -> do
