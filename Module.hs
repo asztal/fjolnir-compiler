@@ -106,11 +106,25 @@ compileCodeModule (Module exports) = do
         compile (VarExport) = VarCE <$> newVarID
         compile (ReExport name) = return $ ReCE name
 
--- TODO '+' should error if both modules define the same export
-plus, compose, combine :: CompiledModule -> CompiledModule -> Compiler CompiledModule 
-plus (CM x) (CM y) = return $ CM $ M.union x y
+compose, combine :: CompiledModule -> CompiledModule -> Compiler CompiledModule 
+plus :: Bool -> CompiledModule -> CompiledModule -> Compiler CompiledModule 
+
+plus ignoreClashes (CM x) (CM y) = 
+    let clashes = M.intersectionWith (,) x y
+    in if M.null clashes || ignoreClashes
+        then return $ CM $ M.union x y
+        else withErrorContext "when compiling a module sum" $ do 
+            let errLines = [ " * " ++ name ++ " (" ++ showType x' ++ " and " ++ showType y' ++ ")" 
+                           | (name, (x', y')) <- M.toList clashes ] 
+                showType (FunCE _) = "stef"
+                showType (VarCE _) = "breyta"
+                showType (ReCE (L _ name)) = "re-export of " ++ show name 
+            compileError noSpan $ 
+                "The following names were exported from both sides of a module sum:"
+                : errLines
+             
 compose (CM x) (CM y) = CM <$> T.mapM (resolveImportsWith y) x
-combine x y = (`plus` y) =<< compose x y
+combine x y = (flip (plus True) y) =<< compose x y
 
 iterateModule :: CompiledModule -> Compiler CompiledModule
 iterateModule (CM x) = CM <$> T.forM x resolve
@@ -177,7 +191,7 @@ compileModule (CodeM m) = compileCodeModule m
 compileModule (GlobalM name) = globalModule name
 compileModule (VarM name) = moduleVariable name
 compileModule (PlusM a b) =
-    join $ plus <$> compileModule a <*> compileModule b
+    join $ plus False <$> compileModule a <*> compileModule b
 compileModule (ComposeM a b) =
     join $ compose <$> compileModule a <*> compileModule b
 compileModule (CombineM a b) =
