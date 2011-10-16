@@ -1,22 +1,24 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 
 module CGen
-    ( generateC
-    , writeEntryPoint
+    ( writeEntryPoint
     ) where
 
 import Control.Applicative
-import Control.Monad (forM, when)
+import Control.Monad (forM, forM_, when)
+import Control.Monad.Error (MonadError)
 import Control.Monad.Trans (MonadTrans(..), MonadIO(..))
 import Control.Monad.Writer (WriterT, execWriterT, MonadWriter(tell))
-import Data.List (intercalate)
+import Data.List (intercalate, intersperse)
 import Data.Map (Map)
 import qualified Data.Map as M
 import Data.Sequence (Seq)
 import qualified Data.Sequence as Seq 
 import Data.Set (Set)
 import qualified Data.Set as S
+import qualified Data.Foldable as F
 import System.FilePath (addExtension)
+import System.IO (hPutStr, withFile, IOMode(..))
 
 import Compiler
 import Module
@@ -26,13 +28,22 @@ import Var
 import Types
 
 newtype GenC a = GenC { unGenC :: WriterT (Seq String) Compiler a }
-    deriving (Functor, Monad, Applicative, MonadIO, MonadWriter (Seq String))
+    deriving (Functor, Monad, Applicative, MonadIO, MonadWriter (Seq String), MonadError CompilerError)
     
 write :: String -> GenC ()
 write = tell . Seq.singleton
 
+newLine :: GenC ()
+newLine = write "\n"
+
 genC :: GenC () -> Compiler (Seq String) 
 genC (GenC x) = execWriterT x
+
+writeCFile :: FilePath -> GenC () -> Compiler ()
+writeCFile path x = do
+    chunks <- genC x
+    liftIO $ withFile path WriteMode $ \h -> do
+        F.mapM_ (hPutStr h) chunks
 
 writeEntryPoint :: Name -> FunID -> Compiler ()
 writeEntryPoint name funID@(FunID funID') = context $ do    
@@ -41,42 +52,52 @@ writeEntryPoint name funID@(FunID funID') = context $ do
         compileError noSpan ["Entry point \"" ++ name ++ "\" has an arity of " ++ show arity]
     
     (usedFuns, usedVars) <- findUsedFunsAndVars (CM (M.singleton "$start" (FunCE funID)))
-    let funDefs = map (uncurry generateC) (M.toList usedFuns)
-        varDefs = generateVarDefs (S.toList usedVars)
-        protos = map ((++ ";") . uncurry generateProto) (M.toList usedFuns)
-        main = "int main() { F" ++ show funID' ++ "(); return 0; }\n" 
-        header = "#include \"mjollnir.h\"\n\n"
     
-    liftIO $ writeFile filePath (header ++ unlines protos ++ "\n" ++ main ++ varDefs ++ "\n" ++ unlines funDefs)
+    writeCFile filePath $ do
+        write "#include \"mjollnir.h\"\n\n"
+        
+        mapM_ (uncurry (writeProto ";")) (M.toList usedFuns)
+        newLine
+        
+        write $ "int main() { F" ++ show funID' ++ "(); return 0; }\n"
+        newLine
+        
+        
+        writeVarDefs (S.toList usedVars)
+        mapM_ ((>> newLine) . uncurry writeC) (M.toList usedFuns) 
+    
     where
         context = withErrorContext $ "when writing the C file " ++ filePath
         filePath = name `addExtension` "c"
     
-generateVarDefs xs = unlines    
-    [ "Value V" ++ show varID ++ " = nil;" | VarID varID <- xs ]
+writeVarDefs xs = forM_ xs $ \(VarID varID) -> write $    
+    "Value V" ++ show varID ++ " = nil;\n"
 
-generateProto (FunID funID) (CompiledFunction arity _ _) =
-    "Value F" ++ show funID ++ " (" ++ argList arity ++ ")"
+writeProto suffix funID cf = write $ generateProto funID cf ++ suffix ++ "\n"
+    where
+        generateProto (FunID funID) (CompiledFunction arity _ _) =
+            "Value F" ++ show funID ++ " (" ++ argList arity ++ ")"
 
 nameList prefix suffix count = intercalate ", " [ prefix ++ show i ++ suffix | i <- [0..count-1]]
 argList arity = intercalate ", " . filter (not . null) $
     [ nameList "Value *R" "" (fst arity)
     , nameList "Value A" "" (snd arity)]
 
-generateC :: FunID -> CompiledFunction -> String
-generateC (FunID funID) cf@(CompiledFunction arity _locals instructions) = 
-    generateProto (FunID funID) cf ++ " {\n"
-    ++ stackVars
-    ++ localVars
-    ++ concatMap (uncurry genInstr) (zip [0..] instructions)
-    ++ "  I" ++ show (length instructions) ++ ": return S0;\n"
-    ++ "}\n"
-    where
-        stackVars = "  Value " ++ nameList "S" "" (stackVarCount instructions) ++ ";\n"
-        localVars = case localVarCount instructions of
-            0 -> ""
-            count -> "  Value " ++ nameList "L" " = nil" count ++ ";\n"
+writeC :: FunID -> CompiledFunction -> GenC ()
+writeC (FunID funID) cf@(CompiledFunction arity _locals instructions) = do
+    writeProto " {" (FunID funID) cf
+    writeStackVars
+    writeLocalVars
+    mapM_ (uncurry writeInstruction) $ zip [0..] instructions 
     
+    write $ "  I" ++ show (length instructions) ++ ": return S0;\n"
+    write "}\n"
+    where
+        writeStackVars = write $ "  Value " ++ nameList "S" "" (stackVarCount instructions) ++ ";\n"
+        writeLocalVars = case localVarCount instructions of
+            0 -> write ""
+            count -> write $ "  Value " ++ nameList "L" " = nil" count ++ ";\n"
+
         stackVarCount xs = foldr1 max (0 : concatMap getStackRefs xs) + 1
         localVarCount xs = foldr max (-1) (concatMap getLocalRefs xs) + 1
         
@@ -87,37 +108,56 @@ generateC (FunID funID) cf@(CompiledFunction arity _locals instructions) =
         getLocalRefs x = concatMap f (varRefs x) where
             f (LocalVar i) = [i]
             f _ = []
-    
-genInstr :: Int -> Instruction Int -> String
-genInstr i instruction = "  I" ++ show i ++ ": " ++ f instruction ++ ";\n" where
-    f (WordI v w) = showVar v ++ " = makeWord(" ++ show w ++ ")"
-    f (StringI v s) = showVar v ++ " = makeString(" ++ show s ++ ")"
-    f (NilI v) = showVar v ++ " = nil"
-    f (RealI v x) = showVar v ++ " = makeReal(" ++ show x ++ "d)"
-    f (AssignI u v) = showVar u ++ " = " ++ showVar v
-    f (JumpI l) = "goto I" ++ show l
-    f (ConditionalI v l) = "if (" ++ showVar v ++ ") goto I" ++ show l
-    f (CallI v f vs vs') = showVar v ++ " = " ++ showFun f ++ "(" ++ intercalate "," (map showRefArg vs ++ map showVar vs') ++ ")"
-    f (CallVI v f vs vs') = showVar v ++ " = ((" ++ typeSig (length vs, length vs') ++ ")(loadStef(" ++ showVar f ++ "," ++ show (length vs) ++ "," ++ show (length vs') ++ ")))(" ++ intercalate "," (map showRefArg vs ++ map showVar vs') ++ ")"
-    f (LoadFunI v f (m,n)) = showVar v ++ " = makeStef(&" ++ showFun f ++ "," ++ show m ++ "," ++ show n ++ ")" 
-    f _ = "/* TODO */"
+            
+writeInstruction :: Int -> Instruction Int -> GenC ()
+writeInstruction i instruction = write ("  I" ++ show i ++ ": ") >> f instruction >> write ";\n" where
+    f (WordI v w) = writeVar v >> write " = makeWord(" >> write (show w ++ ")")
+    f (StringI v s) = writeVar v >> write " = makeString(" >> write (show s ++ ")")
+    f (NilI v) = writeVar v >> write " = nil"
+    f (RealI v x) = writeVar v >> write " = makeReal(" >> write (show x) >> write "d)"
+    f (AssignI u v) = writeVar u >> write " = " >> writeVar v
+    f (JumpI l) = write $ "goto I" ++ show l
+    f (ConditionalI v l) = write "if (" >> writeVar v >> write ") goto I" >> write (show l)
+    f (CallI v f vs vs') = do
+        writeVar v
+        write " = "
+        writeFun f
+        write "(" 
+        sequence_ $ intersperse (write ",") (map writeRefArg vs ++ map writeVar vs')
+        write ")"
+    f (CallVI v f vs vs') = do
+        writeVar v
+        write " = (("
+        write (typeSig (length vs, length vs')) 
+        write ")(loadStef(" 
+        writeVar f
+        write ","
+        write $ show (length vs) ++ "," ++ show (length vs') ++ ")))("
+        sequence_ $ intersperse (write ",") (map writeRefArg vs ++ map writeVar vs')
+        write ")"
+    f (LoadFunI v f (m,n)) = do
+        writeVar v 
+        write " = makeStef(&" 
+        writeFun f 
+        write "," 
+        write $ show m ++ "," ++ show n ++ ")" 
+    f _ = write "/* TODO */"
     
     typeSig (m,n) = "Value(*)(" ++ intercalate "," (ms ++ ns) ++ ")" where
         ms = replicate m "Value*"
         ns = replicate n "Value"
     
-    showRefArg :: Var -> String
-    showRefArg v = "&" ++ showVar v
+    writeRefArg :: Var -> GenC ()
+    writeRefArg v = write "&" >> writeVar v
     
-    showVar :: Var -> String
-    showVar (ImportedVar _) = error "ImportedVar present at C generation stage"
-    showVar (LocalVar j) = "L" ++ show j
-    showVar (ArgVar j) = "A" ++ show j
-    showVar (RefArgVar j) = "*R" ++ show j
-    showVar (StackVar j) = "S" ++ show j
-    showVar (ResolvedVar (VarID varID)) = "V" ++ show varID
+    writeVar :: Var -> GenC ()
+    writeVar (ImportedVar (L loc name)) = compileError loc ["Unresolved variable " ++ show name ++ " encountered"]
+    writeVar (LocalVar j) = write $ "L" ++ show j
+    writeVar (ArgVar j) = write $ "A" ++ show j
+    writeVar (RefArgVar j) = write $ "*R" ++ show j
+    writeVar (StackVar j) = write $ "S" ++ show j
+    writeVar (ResolvedVar (VarID varID)) = write $ "V" ++ show varID
     
-    showFun :: Fun -> String
-    --showFun (ImportedFun (L _ name) _) = name
-    showFun (ImportedFun (L _ name) _) = error $ "ImportedFun " ++ name ++ " present at C generation stage"
-    showFun (ResolvedFun (FunID funID)) = "F" ++ show funID
+    writeFun :: Fun -> GenC ()
+    writeFun (ImportedFun (L loc name) _) = compileError loc ["Unresolved function " ++ show name ++ " encountered"]
+    writeFun (ResolvedFun (FunID funID)) = write $ "F" ++ show funID
