@@ -23,10 +23,7 @@ import Located
 import Var
 import Types
 
--- TODO Add location info to modules
--- type ModuleInfo = Either SrcSpan ModuleName {- global -}
--- data CompiledModule = CompiledModule ModuleInfo (Map LName CompiledExport)
---      Use LName for key type? (Located defines appropriate Eq and Ord)
+-- Imports -------------------------------------------------------------
 
 data ImportType
     = ImportFun Arity
@@ -70,7 +67,7 @@ irImports = M.unionsWith mappend . map f where
     h _ = []
 
 moduleImports :: CompiledModule -> Compiler (Map Name ImportType)
-moduleImports (CM x) =
+moduleImports (CM _ x) =
     M.unionsWith mappend <$> mapM (uncurry exportImports) (M.toList x)
     where
         exportImports :: Name -> CompiledExport -> Compiler (Map Name ImportType)
@@ -81,11 +78,11 @@ moduleImports (CM x) =
         exportImports n (ReCE (L _ name)) = return $ M.singleton name ImportAny
         
 checkImportsValid :: CompiledModule -> Compiler ()
-checkImportsValid m = do
+checkImportsValid m@(CM loc _) = do
     imports <- moduleImports m
     let errors = M.filter isImportError imports
     when (not (M.null errors)) $ do
-        compileError noSpan $
+        moduleError m $
             "Conflicting imports found in a module:"
             : [ "  " ++ name ++ ": " ++ show err | (name, err) <- M.toList errors ]
         
@@ -93,9 +90,11 @@ checkImportsValid m = do
         isImportError (ImportError _) = True
         isImportError _ = False
 
-compileCodeModule :: Module -> Compiler CompiledModule
-compileCodeModule (Module exports) = do
-    m <- CM <$> T.forM exports compile
+-- Compiling -----------------------------------------------------------
+
+compileCodeModule :: SrcSpan -> Module -> Compiler CompiledModule
+compileCodeModule loc (Module exports) = do
+    m <- CM (sourceModule loc) <$> T.forM exports compile
     checkImportsValid m
     return m
     where 
@@ -106,14 +105,14 @@ compileCodeModule (Module exports) = do
         compile (VarExport) = VarCE <$> newVarID
         compile (ReExport name) = return $ ReCE name
 
-compose, combine :: CompiledModule -> CompiledModule -> Compiler CompiledModule 
-plus :: Bool -> CompiledModule -> CompiledModule -> Compiler CompiledModule 
+compose, combine, andModule :: SrcSpan -> CompiledModule -> CompiledModule -> Compiler CompiledModule 
+plus :: SrcSpan -> Bool -> CompiledModule -> CompiledModule -> Compiler CompiledModule 
 
-plus ignoreClashes (CM x) (CM y) = 
+plus loc ignoreClashes (CM _ x) (CM _ y) = 
     let clashes = M.intersectionWith (,) x y
     in if M.null clashes || ignoreClashes
-        then return $ CM $ M.union x y
-        else withErrorContext "when compiling a module sum" $ do 
+        then return $ CM (sourceModule loc) $ M.union x y
+        else do 
             let errLines = [ " * " ++ name ++ " (" ++ showType x' ++ " and " ++ showType y' ++ ")" 
                            | (name, (x', y')) <- M.toList clashes ] 
                 showType (FunCE _) = "stef"
@@ -123,12 +122,15 @@ plus ignoreClashes (CM x) (CM y) =
                 "The following names were exported from both sides of a module sum:"
                 : errLines
              
-compose (CM x) (CM y) = CM <$> T.mapM (resolveImportsWith y) x
-combine x y = (flip (plus True) y) =<< compose x y
+compose loc (CM _ x) (CM _ y) = CM (sourceModule loc) <$> T.mapM (resolveImportsWith y) x
+combine loc x y = (flip (plus loc True) y) =<< compose loc x y
+andModule loc x y = iterateModule loc =<< plus loc False x y
 
-iterateModule :: CompiledModule -> Compiler CompiledModule
-iterateModule (CM x) = CM <$> T.forM x resolve
+iterateModule :: SrcSpan -> CompiledModule -> Compiler CompiledModule
+iterateModule loc (CM _ x) = context $ CM (sourceModule loc) <$> T.forM x resolve
     where
+        context = withErrorContext $ "When iterating the module at " ++ show loc
+    
         resolve (FunCE funID) = FunCE <$> resolveFunWith x funID
         resolve (VarCE varID) = return $ VarCE varID
         resolve r@(ReCE (L loc name)) = resolveChain x [] r
@@ -187,17 +189,24 @@ resolveImportsWith src (ReCE (L loc name)) = return $ case M.lookup name src of
     Nothing -> ReCE (L loc name)
 
 compileModule :: ModuleExpr -> Compiler CompiledModule
-compileModule (CodeM m) = compileCodeModule m
+compileModule (CodeM loc m) = compileCodeModule loc m
 compileModule (GlobalM name) = globalModule name
 compileModule (VarM name) = moduleVariable name
-compileModule (PlusM a b) =
-    join $ plus False <$> compileModule a <*> compileModule b
-compileModule (ComposeM a b) =
-    join $ compose <$> compileModule a <*> compileModule b
-compileModule (CombineM a b) =
-    join $ combine <$> compileModule a <*> compileModule b
-compileModule (IterateM a) =
-    iterateModule =<< compileModule a
+compileModule (PlusM loc a b) = withErrorContext
+    ("when compiling the module sum " ++ show loc)
+    $ join $ plus loc False <$> compileModule a <*> compileModule b
+compileModule (ComposeM loc a b) = withErrorContext
+    ("when composing the modules around the '*' at " ++ show loc)
+    $ join $ compose loc <$> compileModule a <*> compileModule b
+compileModule (CombineM loc a b) = withErrorContext
+    ("when combining the modules around the ':' at " ++ show loc)
+    $ join $ combine loc <$> compileModule a <*> compileModule b
+compileModule (AndM loc a b) = withErrorContext
+    ("when combining the modules around the '&' at " ++ show loc)
+    $ join $ andModule loc <$> compileModule a <*> compileModule b
+compileModule (IterateM loc a) = withErrorContext 
+    ("when iterating the module at " ++ show loc)
+    $ iterateModule loc =<< compileModule a
 
 performProgramStatement :: ProgramStatement -> Compiler ()
 performProgramStatement (DefineGlobalModule (L loc name) (L _ decl)) = 
@@ -225,7 +234,7 @@ exprFromDecl (ModuleDecl (L loc code)) =
         duplicates = filter (not . null . tail) groups
         showDuplicate (name, _) = "  " ++ unLoc name ++ atLoc name
     in case duplicates of
-        [] -> return . CodeM . Module . M.fromList . map (first unLoc) $ exprs
+        [] -> return . CodeM loc . Module . M.fromList . map (first unLoc) $ exprs
         xs -> compileError loc $
             "Code module exports names more than once"
             : map showDuplicate (concat duplicates)
@@ -236,24 +245,25 @@ exprFromDecl (ModuleDecl (L loc code)) =
         f ExportVarDecl = VarExport
 exprFromDecl (GlobalModule name) = return $ GlobalM (unLoc name)
 exprFromDecl (ModuleVariable name) = return $ VarM (unLoc name)
-exprFromDecl (RecursiveModule decl) = IterateM <$> exprFromDecl (unLoc decl)
-exprFromDecl (CombinedModule (L _ a) (L _ name) (L _ b)) = do
+exprFromDecl (RecursiveModule (L loc decl)) = IterateM loc <$> exprFromDecl decl
+exprFromDecl (CombinedModule (L _ a) (L loc name) (L _ b)) = do
     a' <- exprFromDecl a
     b' <- exprFromDecl b
     case name of
-        "+" -> return $ PlusM a' b'
-        "*" -> return $ ComposeM a' b'
-        ":" -> return $ CombineM a' b'
-        "&" -> return $ IterateM (PlusM a' b')
+        "+" -> return $ PlusM loc a' b'
+        "*" -> return $ ComposeM loc a' b'
+        ":" -> return $ CombineM loc a' b'
+        "&" -> return $ AndM loc a' b'
 
 data ModuleExpr
-    = CodeM Module -- { }
+    = CodeM SrcSpan Module -- { }
     | GlobalM Name -- "EINING"
     | VarM Name    -- ein
-    | PlusM ModuleExpr ModuleExpr      -- a + b
-    | CombineM ModuleExpr ModuleExpr   -- a : b
-    | ComposeM ModuleExpr ModuleExpr   -- a * b
-    | IterateM ModuleExpr              -- !a
+    | PlusM SrcSpan ModuleExpr ModuleExpr      -- a + b
+    | CombineM SrcSpan ModuleExpr ModuleExpr   -- a : b
+    | ComposeM SrcSpan ModuleExpr ModuleExpr   -- a * b
+    | IterateM SrcSpan ModuleExpr              -- !a
+    | AndM SrcSpan ModuleExpr ModuleExpr       -- a & b
     
     -- No need for case to represent the "&" operator.
     -- a & b is equivalent to !(a + b).

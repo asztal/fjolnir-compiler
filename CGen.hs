@@ -51,7 +51,7 @@ writeEntryPoint name funID@(FunID funID') = context $ do
     when (arity /= (0,0)) $ do
         compileError noSpan ["Entry point \"" ++ name ++ "\" has an arity of " ++ show arity]
     
-    (usedFuns, usedVars) <- findUsedFunsAndVars (CM (M.singleton "$start" (FunCE funID)))
+    (usedFuns, usedVars) <- findUsedFunsAndVars (CM (namedModule "$START") (M.singleton "$start" (FunCE funID)))
     
     writeCFile filePath $ do
         write "#include \"mjollnir.h\"\n\n"

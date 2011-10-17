@@ -8,6 +8,7 @@ module Compiler
     , checkNameClashes
     , parseProgram
     
+    , ModuleLoc, namedModule, sourceModule, moduleError
     , Module(..), CompiledModule(..)
     , Export(..), CompiledExport(..)
     , VarID, newVarID, CompiledFunction(..)
@@ -51,6 +52,7 @@ import DeriveBinary
 import IR
 import Located
 import Var
+import Types
 
 import Text.Parsec.Error
 import Text.Parsec.Pos
@@ -104,6 +106,7 @@ instance Show CompilerError where
             then show loc ++ ":\n" else "Compilation error:\n")
         ++ unlines (map ("  " ++) (msg ++ map ("  "++) (reverse ctxs)))
 
+withErrorContext :: String -> Compiler a -> Compiler a
 withErrorContext ctx action = action `catchError` addCtx where
     addCtx (CompilerError loc msg ctxs) = throwError $ CompilerError loc msg (ctx:ctxs)
 
@@ -126,7 +129,26 @@ debugMessage str = liftIO $ hPutStrLn stderr $ " ** " ++ str
 -- Modules -------------------------------------------------------------
 
 data Module = Module (Map Name Export)
-data CompiledModule = CM (Map Name CompiledExport)
+data CompiledModule = CM ModuleLoc (Map Name CompiledExport)
+
+newtype ModuleLoc = ModuleLoc (Either ModuleName SrcSpan)
+    deriving (Eq, Ord)
+
+namedModule :: ModuleName -> ModuleLoc
+namedModule = ModuleLoc . Left
+
+sourceModule :: SrcSpan -> ModuleLoc
+sourceModule = ModuleLoc . Right
+
+moduleError :: CompiledModule -> [String] -> Compiler ()
+moduleError (CM (ModuleLoc (Left name)) _) xs
+    = withErrorContext ("in the module named " ++ name) $ 
+        compileError noSpan xs
+moduleError (CM (ModuleLoc (Right loc)) _) xs = compileError loc xs
+
+instance Show ModuleLoc where
+    show (ModuleLoc (Left name)) = name
+    show (ModuleLoc (Right loc)) = show loc
 
 data Export
     = FunExport FunctionDecl
@@ -147,14 +169,14 @@ loadExternalModules = do
     
     modules <- forM paths $ \path -> do
         let name = takeBaseName path
-        m <- readModule path
+        m <- readModule (show name) path
         return (name, Just m)
     
     modify $ \cs -> cs { csGlobalModules = M.fromList modules }
 
 loadExternalModule :: Name -> Compiler CompiledModule
 loadExternalModule name = do
-    m <- readModule (name `addExtension` "ein") 
+    m <- readModule (show name) (name `addExtension` "ein") 
     modify $ \cs -> cs { csGlobalModules = 
         M.insert name (Just m) (csGlobalModules cs) }
     return m
@@ -175,7 +197,7 @@ defineGlobalModule name m = do
         }
 
 defineEntryPoint :: Name -> FunName -> CompiledModule -> Compiler ()
-defineEntryPoint epName funName (CM m) =
+defineEntryPoint epName funName (CM _ m) =
     case M.lookup funName m of
         Just (FunCE funID) -> do
             eps <- gets csEntryPoints
@@ -213,12 +235,12 @@ newVarID = do
 -- Global Modules ------------------------------------------------------
     
 writeModule :: FilePath -> CompiledModule -> Compiler ()
-writeModule path (CM m) = do
-    (funIDs, _) <- findUsedFunsAndVars (CM m)
+writeModule path (CM loc m) = do
+    (funIDs, _) <- findUsedFunsAndVars (CM loc m)
     liftIO $ encodeFile path (funIDs, m)
 
 findUsedFunsAndVars :: CompiledModule -> Compiler (Map FunID CompiledFunction, Set VarID)
-findUsedFunsAndVars (CM m) = execStateT (mapM_ findFunsIn (M.elems m)) (M.empty, S.empty)
+findUsedFunsAndVars (CM _ m) = execStateT (mapM_ findFunsIn (M.elems m)) (M.empty, S.empty)
     where
         findFunsIn (FunCE funID) = do
             (found, _) <- get
@@ -245,16 +267,16 @@ findUsedFunsAndVars (CM m) = execStateT (mapM_ findFunsIn (M.elems m)) (M.empty,
 
 type FixupState = (,) (Map FunID FunID) (Map VarID VarID)
 
-readModule :: FilePath -> Compiler CompiledModule
-readModule path = context $ do
+readModule :: ModuleName -> FilePath -> Compiler CompiledModule
+readModule name path = context $ do
     (funs, exports) <- liftIO $ decodeFile path 
         :: Compiler (Map FunID CompiledFunction, Map Name CompiledExport)
     
     funIDs <- T.mapM defineFunction funs
     
-    CM <$> evalStateT (T.mapM fixIDs exports) (funIDs, M.empty)
+    CM (namedModule name) <$> evalStateT (T.mapM fixIDs exports) (funIDs, M.empty)
     where
-        context = withErrorContext $ "when reading global module at " ++ path
+        context = withErrorContext $ "when reading global module " ++ name
          
         fixIDs :: CompiledExport -> StateT FixupState Compiler CompiledExport
         fixIDs (VarCE varID) = do
@@ -273,6 +295,7 @@ readModule path = context $ do
                 Just funID' -> return (FunCE funID')
                 
         fixIDs r = return r
+
 -- Compiled Functions --------------------------------------------------
 
 newFunID :: Compiler FunID
@@ -317,3 +340,4 @@ parseProgram path = do
 
 deriveBinary ''CompiledFunction
 deriveBinary ''CompiledExport
+deriveBinary ''ModuleLoc

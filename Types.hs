@@ -2,6 +2,7 @@ module Types
     ( Name, LName
     , VarName, LVarName
     , FunName, LFunName
+    , ModuleName
     , Arity
     ) where
 
@@ -14,3 +15,4 @@ type LVarName = Located VarName
 type FunName = Name
 type LFunName = Located FunName
 type Arity = (Integer, Integer)
+type ModuleName = Name
