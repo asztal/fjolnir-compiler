@@ -51,17 +51,19 @@ writeEntryPoint name funID@(FunID funID') = context $ do
     when (arity /= (0,0)) $ do
         compileError noSpan ["Entry point \"" ++ name ++ "\" has an arity of " ++ show arity]
     
-    (usedFuns, usedVars) <- findUsedFunsAndVars (CM (namedModule "$START") (M.singleton "$start" (FunCE funID)))
+    (usedFuns, (usedVars, nativeFuns)) <- findUsedFunsAndVars (CM (namedModule "$START") (M.singleton "$start" (FunCE funID)))
     
     writeCFile filePath $ do
         write "#include \"mjollnir.h\"\n\n"
+        
+        mapM_ writeNativeProto (S.toList nativeFuns)
+        newLine
         
         mapM_ (uncurry (writeProto ";")) (M.toList usedFuns)
         newLine
         
         write $ "int main() { F" ++ show funID' ++ "(); return 0; }\n"
         newLine
-        
         
         writeVarDefs (S.toList usedVars)
         mapM_ ((>> newLine) . uncurry writeC) (M.toList usedFuns) 
@@ -77,6 +79,9 @@ writeProto suffix funID cf = write $ generateProto funID cf ++ suffix ++ "\n"
     where
         generateProto (FunID funID) (CompiledFunction arity _ _) =
             "Value F" ++ show funID ++ " (" ++ argList arity ++ ")"
+
+writeNativeProto (NativeFunction cName _ arity) = write $
+    "Value " ++ cName ++ " (" ++ argList arity ++ ");\n"
 
 nameList prefix suffix count = intercalate ", " [ prefix ++ show i ++ suffix | i <- [0..count-1]]
 argList arity = intercalate ", " . filter (not . null) $
@@ -161,3 +166,4 @@ writeInstruction i instruction = write ("  I" ++ show i ++ ": ") >> f instructio
     writeFun :: Fun -> GenC ()
     writeFun (ImportedFun (L loc name) _) = compileError loc ["Unresolved function " ++ show name ++ " encountered"]
     writeFun (ResolvedFun (FunID funID)) = write $ "F" ++ show funID
+    writeFun (ResolvedNativeFun (NativeFunction cName _ _)) = write cName

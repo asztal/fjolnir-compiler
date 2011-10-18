@@ -5,6 +5,7 @@ module Var
     , FunID(..)
     , Var(..)
     , Fun(..)
+    , NativeFunction(..)
     ) where
 
 import DeriveBinary
@@ -31,8 +32,14 @@ data Var
     
 deriveBinary ''Var
 
+data NativeFunction = NativeFunction FunName Name Arity
+    deriving (Show, Eq, Ord)
+
+deriveBinary ''NativeFunction
+
 data Fun
     = ImportedFun LFunName Arity
+    | ResolvedNativeFun NativeFunction
     | ResolvedFun FunID
     deriving Show
     

@@ -110,6 +110,10 @@ data ExportDecl
     = ExportAgainDecl (LName)
     | ExportVarDecl
     | ExportFunDecl (Located FunctionDecl)
+    | ExportNative       -- Import and export a function defined in C
+        LFunName         -- The function name in the C object
+        LName            -- The C library name (e.g. "mjollnir" for libmjollnir.o)
+        (Located Arity)  -- The arity of the function
     deriving Show
 
 data ModuleDecl

@@ -74,8 +74,8 @@ moduleImports (CM _ x) =
         exportImports n (FunCE funID) = do
             CompiledFunction _ _ ir <- retrieveFunction funID 
             return (irImports ir)
-        exportImports n (VarCE _) = return M.empty
         exportImports n (ReCE (L _ name)) = return $ M.singleton name ImportAny
+        exportImports n _ = return M.empty
         
 checkImportsValid :: CompiledModule -> Compiler ()
 checkImportsValid m@(CM loc _) = do
@@ -104,6 +104,7 @@ compileCodeModule loc (Module exports) = do
                 (CompiledFunction fnArity fnLocalCount (compileToIR fnBody))
         compile (VarExport) = VarCE <$> newVarID
         compile (ReExport name) = return $ ReCE name
+        compile (NativeExport nf) = return $ NativeCE nf
 
 compose, combine, andModule :: SrcSpan -> CompiledModule -> CompiledModule -> Compiler CompiledModule 
 plus :: SrcSpan -> Bool -> CompiledModule -> CompiledModule -> Compiler CompiledModule 
@@ -116,6 +117,7 @@ plus loc ignoreClashes (CM _ x) (CM _ y) =
             let errLines = [ " * " ++ name ++ " (" ++ showType x' ++ " and " ++ showType y' ++ ")" 
                            | (name, (x', y')) <- M.toList clashes ] 
                 showType (FunCE _) = "stef"
+                showType (NativeCE _) = "cstef"
                 showType (VarCE _) = "breyta"
                 showType (ReCE (L _ name)) = "re-export of " ++ show name 
             compileError noSpan $ 
@@ -132,8 +134,8 @@ iterateModule loc (CM _ x) = context $ CM (sourceModule loc) <$> T.forM x resolv
         context = withErrorContext $ "When iterating the module at " ++ show loc
     
         resolve (FunCE funID) = FunCE <$> resolveFunWith x funID
-        resolve (VarCE varID) = return $ VarCE varID
         resolve r@(ReCE (L loc name)) = resolveChain x [] r
+        resolve x = return x
         
         resolveChain src seen (ReCE n@(L loc name))
             | name `elem` map unLoc seen = compileError loc $
@@ -162,6 +164,7 @@ resolveIR src ir = mapM (modifyIRVarRefs vf ff) ir where
         Just (VarCE varID) -> return $ ResolvedVar varID 
         Just (FunCE _) -> compileError loc ["Resolving name '" ++ name ++ "': expected a variable, found a function"]
         Just (ReCE name') -> return $ ImportedVar name'
+        Just (NativeCE (NativeFunction cName libName _)) -> compileError loc ["Resolving name '" ++ name ++ "': expected a variable, found a native function (" ++ libName ++ "." ++ cName ++ ")"]
     vf r = return r
     
     ff r@(ImportedFun (L loc name) arity ) = case M.lookup name src of
@@ -175,6 +178,7 @@ resolveIR src ir = mapM (modifyIRVarRefs vf ff) ir where
             return $ ResolvedFun funID
         Just (VarCE _) -> compileError loc ["Resolving name '" ++ name ++ "': expected a function, found a variable"]
         Just (ReCE name') -> return $ ImportedFun name' arity
+        Just (NativeCE nf) -> return $ ResolvedNativeFun nf
     ff r = return r
 
 resolveImportsWith :: Map Name CompiledExport -> CompiledExport -> Compiler CompiledExport
@@ -183,10 +187,10 @@ resolveImportsWith src (FunCE funID) = do
     ir' <- resolveIR src ir
     FunCE <$> defineFunction
         (CompiledFunction arity locals ir')
-resolveImportsWith src (VarCE varID) = return $ VarCE varID
 resolveImportsWith src (ReCE (L loc name)) = return $ case M.lookup name src of
     Just e -> e
     Nothing -> ReCE (L loc name)
+resolveImportsWith src x = return x
 
 compileModule :: ModuleExpr -> Compiler CompiledModule
 compileModule (CodeM loc m) = compileCodeModule loc m
@@ -243,6 +247,8 @@ exprFromDecl (ModuleDecl (L loc code)) =
         f (ExportAgainDecl name) = ReExport name
         f (ExportFunDecl (L _ decl)) = FunExport decl
         f ExportVarDecl = VarExport
+        f (ExportNative (L _ cName) (L _ libName) (L _ arity)) 
+            = NativeExport (NativeFunction cName libName arity)
 exprFromDecl (GlobalModule name) = return $ GlobalM (unLoc name)
 exprFromDecl (ModuleVariable name) = return $ VarM (unLoc name)
 exprFromDecl (RecursiveModule (L loc decl)) = IterateM loc <$> exprFromDecl decl

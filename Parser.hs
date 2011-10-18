@@ -199,9 +199,24 @@ vörpun = do
     symbol "->"
     value <- val name <?> "value of " ++ showIdent (unLoc name)
     return (name, value)
-    where val name =  ExportFunDecl <$> loc (stefskilgreining (unLoc name))
+    where val name = nativeImport
+                  <|> ExportFunDecl <$> loc (stefskilgreining (unLoc name))
                   <|> ExportAgainDecl <$> loc (nafn <|> aðgerð)
                   <|> ExportVarDecl <$ reserved "breyta"
+
+-- | A native import in a module
+-- | Example: f -> cstef openTCPSocket sockets (0;2) ;; addr, port
+nativeImport :: P ExportDecl
+nativeImport = do
+    reserved "cstef"
+    cName <- loc nafn
+    libName <- loc nafn
+    arity <- loc . brackets $ do
+        io <- fjöldatala <?> "inout arity of " ++ showIdent (unLoc cName)
+        semi <?> "\";\" between number of inout and in parameters for" ++ showIdent (unLoc cName)
+        i <- fjöldatala <?> "inward arity of " ++ showIdent (unLoc cName)
+        return (io, i)    
+    return $ ExportNative cName libName arity
 
 -- | A subroutine entry in a module.
 stefskilgreining :: Name -> P FunctionDecl

@@ -154,11 +154,13 @@ data Export
     = FunExport FunctionDecl
     | VarExport 
     | ReExport LName
+    | NativeExport NativeFunction
 
 data CompiledExport
     = FunCE FunID
     | VarCE VarID
     | ReCE LName
+    | NativeCE NativeFunction
     
 loadExternalModules :: Compiler ()
 loadExternalModules = do
@@ -199,15 +201,29 @@ defineGlobalModule name m = do
 defineEntryPoint :: Name -> FunName -> CompiledModule -> Compiler ()
 defineEntryPoint epName funName (CM _ m) =
     case M.lookup funName m of
-        Just (FunCE funID) -> do
+        Just (FunCE funID) -> define funID
+        -- Can't use a native function as an export, but we
+        -- can wrap it with a Fjölnir function quite easily.
+        Just (NativeCE nf@(NativeFunction c l arity)) -> do
+            when (arity /= (0,0)) $ compileError noSpan
+                ["Entry point " ++ show epName
+                ++ ": expected a function with no arguments, "
+                ++ "found a native function (" ++ l ++ "." ++ c 
+                ++ ") with arity " ++ show arity ]
+            
+            let cf = CompiledFunction (0,0) 0 [ir]
+                ir = CallI (StackVar 0) (ResolvedNativeFun nf) [] []
+            define =<< defineFunction cf
+        Just (VarCE _) -> compileError noSpan ["Entry point " ++ show epName ++ ": expected a function, found a variable (" ++ funName ++ " -> breyta)"]
+        Just (ReCE (L loc n)) -> compileError loc ["Entry point " ++ show epName ++ ": expected a function, found an unresolved re-export (" ++ funName ++ " -> " ++ n ++ ")"]
+        Nothing -> compileError noSpan ["Entry point " ++ show epName ++ ": expected a function, found nothing"]
+    where
+        define funID = do
             eps <- gets csEntryPoints
             when (M.member epName eps) $ 
                 compileError noSpan ["Entry point " ++ show epName ++ ": entry point defined twice"] 
             modify $ \cs -> cs { csEntryPoints = M.insert epName funID eps }
-        Just (VarCE _) -> compileError noSpan ["Entry point " ++ show epName ++ ": expected a function, found a variable (" ++ funName ++ " -> breyta)"]
-        Just (ReCE (L loc n))  -> compileError loc ["Entry point " ++ show epName ++ ": expected a function, found an unresolved re-export (" ++ funName ++ " -> " ++ n ++ ")"]
-        Nothing -> compileError noSpan ["Entry point " ++ show epName ++ ": expected a function, found nothing"]
-
+    
 getEntryPoints :: Compiler [(Name, FunID)]
 getEntryPoints = M.toList <$> gets csEntryPoints
 
@@ -239,8 +255,10 @@ writeModule path (CM loc m) = do
     (funIDs, _) <- findUsedFunsAndVars (CM loc m)
     liftIO $ encodeFile path (funIDs, m)
 
-findUsedFunsAndVars :: CompiledModule -> Compiler (Map FunID CompiledFunction, Set VarID)
-findUsedFunsAndVars (CM _ m) = execStateT (mapM_ findFunsIn (M.elems m)) (M.empty, S.empty)
+findUsedFunsAndVars 
+    :: CompiledModule
+    -> Compiler (Map FunID CompiledFunction, (Set VarID, Set NativeFunction))
+findUsedFunsAndVars (CM _ m) = execStateT (mapM_ findFunsIn (M.elems m)) (M.empty, (S.empty, S.empty))
     where
         findFunsIn (FunCE funID) = do
             (found, _) <- get
@@ -248,7 +266,9 @@ findUsedFunsAndVars (CM _ m) = execStateT (mapM_ findFunsIn (M.elems m)) (M.empt
                 notifyFun funID
         findFunsIn _ = return ()
 
-        notifyVar varID = modify $ second (S.insert varID)
+        notifyVar varID = modify $ (second . first) (S.insert varID)
+        
+        notifyNative nf = modify $ (second . second) (S.insert nf)
 
         notifyFun funID = do
             cf <- lift $ retrieveFunction funID
@@ -259,6 +279,8 @@ findUsedFunsAndVars (CM _ m) = execStateT (mapM_ findFunsIn (M.elems m)) (M.empt
                 case r of
                     ResolvedFun funID ->
                         findFunsIn (FunCE funID)
+                    ResolvedNativeFun nf ->
+                        notifyNative nf
                     _ -> return ()
             forM_ (concatMap varRefs ir) $ \r ->
                 case r of
