@@ -9,7 +9,7 @@ import Control.Monad (forM, forM_, when)
 import Control.Monad.Error (MonadError)
 import Control.Monad.Trans (MonadTrans(..), MonadIO(..))
 import Control.Monad.Writer (WriterT, execWriterT, MonadWriter(tell))
-import Data.List (intercalate, intersperse)
+import Data.List (intercalate, intersperse, genericLength)
 import Data.Map (Map)
 import qualified Data.Map as M
 import Data.Sequence (Seq)
@@ -35,6 +35,9 @@ write = tell . Seq.singleton
 
 newLine :: GenC ()
 newLine = write "\n"
+
+liftC :: Compiler a -> GenC a
+liftC = GenC . lift
 
 genC :: GenC () -> Compiler (Seq String) 
 genC (GenC x) = execWriterT x
@@ -114,6 +117,21 @@ writeC (FunID funID) cf@(CompiledFunction arity _locals instructions) = do
             f (LocalVar i) = [i]
             f _ = []
             
+checkArity :: Fun -> Arity -> Compiler ()
+checkArity (ResolvedFun funID) arity = do
+    CompiledFunction arity' _ _ <- retrieveFunction funID
+    checkArity' arity arity'
+checkArity (ResolvedNativeFun (NativeFunction _ _ arity')) arity =
+    checkArity' arity arity'
+checkArity _ _ = return () -- This is an error but will be caught elsewhere.
+
+checkArity' :: Arity -> Arity -> Compiler ()
+checkArity' arity arity' = 
+    when (arity /= arity') $
+        panic noSpan ["Function call with incorrect arity: should "
+        ++ "have been " ++ show arity' ++ ", but was given " ++ show arity 
+        ++ " arguments"]
+        
 writeInstruction :: Int -> Instruction Int -> GenC ()
 writeInstruction i instruction = write ("  I" ++ show i ++ ": ") >> f instruction >> write ";\n" where
     f (WordI v w) = writeVar v >> write " = makeWord(" >> write (show w ++ ")")
@@ -124,6 +142,7 @@ writeInstruction i instruction = write ("  I" ++ show i ++ ": ") >> f instructio
     f (JumpI l) = write $ "goto I" ++ show l
     f (ConditionalI v l) = write "if (" >> writeVar v >> write ") goto I" >> write (show l)
     f (CallI v f vs vs') = do
+        liftC $ checkArity f (genericLength vs, genericLength vs')
         writeVar v
         write " = "
         writeFun f

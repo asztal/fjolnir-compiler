@@ -19,7 +19,6 @@ main = compile =<< getArgs
 
 compile paths = do
     result <- runCompiler $ do
-        -- loadNativeModules -- "GRUNNUR", etc.
         loadExternalModules -- "MYMODULE.ein"
         
         forM_ paths $ \path -> do
@@ -29,9 +28,7 @@ compile paths = do
         entryPoints <- getEntryPoints
         
         case entryPoints of
-            [] -> do
-                -- writeNewModules
-                return ()
+            [] -> return ()
             es -> do
                 forM_ es $ \(name, funID) -> do
                     debugMessage $ "Creating C file: " ++ name ++ ".c"

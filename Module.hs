@@ -167,18 +167,23 @@ resolveIR src ir = mapM (modifyIRVarRefs vf ff) ir where
         Just (NativeCE (NativeFunction cName libName _)) -> compileError loc ["Resolving name '" ++ name ++ "': expected a variable, found a native function (" ++ libName ++ "." ++ cName ++ ")"]
     vf r = return r
     
-    ff r@(ImportedFun (L loc name) arity ) = case M.lookup name src of
+    ff r@(ImportedFun (L loc name) arity) = case M.lookup name src of
         Nothing -> return r
         Just (FunCE funID) -> do
             CompiledFunction arity' _ _ <- retrieveFunction funID
             when (arity /= arity') $
                 compileError loc [
                     "Resolving " ++ name ++ ": expected a function of arity " ++ show arity 
-                    ++ "; found  a function of arity " ++ show arity']
+                    ++ "; found a function of arity " ++ show arity']
             return $ ResolvedFun funID
         Just (VarCE _) -> compileError loc ["Resolving name '" ++ name ++ "': expected a function, found a variable"]
         Just (ReCE name') -> return $ ImportedFun name' arity
-        Just (NativeCE nf) -> return $ ResolvedNativeFun nf
+        Just (NativeCE nf@(NativeFunction _ _ arity')) -> if arity == arity'
+            then return $ ResolvedNativeFun nf
+            else compileError loc [
+                    "Resolving " ++ name ++ ": expected a function of arity " ++ show arity 
+                    ++ "; found a native function of arity " ++ show arity']
+
     ff r = return r
 
 resolveImportsWith :: Map Name CompiledExport -> CompiledExport -> Compiler CompiledExport
