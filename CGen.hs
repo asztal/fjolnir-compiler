@@ -165,7 +165,19 @@ writeInstruction i instruction = write ("  I" ++ show i ++ ": ") >> f instructio
         writeFun f 
         write "," 
         write $ show m ++ "," ++ show n ++ ")" 
-    f _ = write "/* TODO */"
+    f (InRangeI u v x y) = do
+        writeVar u 
+        write " = isWord("
+        writeVar v
+        write ") && getWord("
+        writeVar v
+        write ") >= "
+        write (show x)
+        write " && getWord("
+        writeVar v
+        write ") <= "
+        write (show y) 
+        write " ? makeWord(1) : nil"
     
     typeSig (m,n) = "Value(*)(" ++ intercalate "," (ms ++ ns) ++ ")" where
         ms = replicate m "Value*"

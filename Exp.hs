@@ -24,7 +24,7 @@ data Exp var fun
     = NilE
     | WordE Word16
     | RealE Double
-    | StrE (UArray Int Word8)
+    | StrE String
     
     | FunE fun Arity
     | ReadE var

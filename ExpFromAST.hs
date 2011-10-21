@@ -131,8 +131,7 @@ syntaxToExp localIndices argIndices refArgIndices importedVars (L loc expr) =
         transformLiteral (NatLit i) = WordE $ fromIntegral i
         transformLiteral (IntLit i) = WordE $ fromIntegral i
         transformLiteral (FloatLit f) = RealE f
-        transformLiteral (StringLit xs) = StrE $ let len = length xs in
-            listArray (0, len) (fromIntegral len : map (fromIntegral . ord) xs)
+        transformLiteral (StringLit xs) = StrE xs
 
         toBranch (ranges, body) = do
             bodyExp <- recurs body

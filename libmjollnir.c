@@ -46,6 +46,11 @@ static double getDouble(const char* fn, Value x) {
     return *getThing(double, x);
 }
 
+static pair* getPair(const char *fn, Value x) {
+    checkType(fn, x, T_PAIR);
+    return getThing(pair, x);
+}
+
 // Primitives
 
 Value makeStef(void* fun, int m, int n) {
@@ -112,6 +117,13 @@ Value skrifa(Value x) {
     return nil;
 }
 
+Value skrifastreng(Value x) {
+    checkType("skrifastreng", x, T_STRING);
+    string *str = getThing(string,x);
+    printf("%s", str->data);
+    return nil;
+}
+
 Value plusU(Value a, Value b) {
     uint16_t x = checkWord("+", a);
     uint16_t y = checkWord("+", b);
@@ -124,7 +136,111 @@ Value plusS(Value a, Value b) {
     return makeWord(x + y);
 }
 
+Value plusF(Value a, Value b) {
+    double x = getDouble("+++", a);
+    double y = getDouble("+++", b);
+    return makeReal(x + y);
+}
+
+Value minusU(Value a, Value b) {
+    uint16_t x = checkWord("-", a);
+    uint16_t y = checkWord("-", b);
+    return makeWord(x - y);
+}
+
+Value minusS(Value a, Value b) {
+    int16_t x = checkWordS("--", a);
+    int16_t y = checkWordS("--", b);
+    return makeWord(x - y);
+}
+
+Value minusF(Value a, Value b) {
+    double x = getDouble("---", a);
+    double y = getDouble("---", b);
+    return makeReal(x - y);
+}
+
+Value mulU(Value a, Value b) {
+    uint16_t x = checkWord("*", a);
+    uint16_t y = checkWord("*", b);
+    return makeWord(x * y);
+}
+
+Value mulS(Value a, Value b) {
+    int16_t x = checkWordS("**", a);
+    int16_t y = checkWordS("**", b);
+    return makeWord(x * y);
+}
+
+Value mulF(Value a, Value b) {
+    double x = getDouble("***", a);
+    double y = getDouble("***", b);
+    return makeReal(x * y);
+}
+
+Value divU(Value a, Value b) {
+    uint16_t x = checkWord("/", a);
+    uint16_t y = checkWord("/", b);
+    return makeWord(x / y);
+}
+
+Value divS(Value a, Value b) {
+    int16_t x = checkWordS("//", a);
+    int16_t y = checkWordS("//", b);
+    return makeWord(x / y);
+}
+
+Value divF(Value a, Value b) {
+    double x = getDouble("///", a);
+    double y = getDouble("///", b);
+    return makeReal(x / y);
+}
+
 Value ltU(Value a, Value b) {
+    uint16_t x = checkWord("<", a);
+    uint16_t y = checkWord("<", b);
+    if (x < y)
+        return makeWord(1);
+    return nil;
+}
+
+Value ltS(Value a, Value b) {
+    int16_t x = checkWordS("<<", a);
+    int16_t y = checkWordS("<<", b);
+    if (x < y)
+        return makeWord(1);
+    return nil;
+}
+
+Value ltF(Value a, Value b) {
+    double x = getDouble("<<<", a);
+    double y = getDouble("<<<", b);
+    return x < y ? makeWord(1) : nil;
+}
+
+Value lteU(Value a, Value b) {
+    uint16_t x = checkWord("<=", a);
+    uint16_t y = checkWord("<=", b);
+    if (x <= y)
+        return makeWord(1);
+    return nil;
+}
+
+Value lteS(Value a, Value b) {
+    int16_t x = checkWordS("<=<=", a);
+    int16_t y = checkWordS("<=<=", b);
+    if (x <= y)
+        return makeWord(1);
+    return nil;
+}
+
+Value lteF(Value a, Value b) {
+    double x = getDouble("<=<=<=", a);
+    double y = getDouble("<=<=<=", b);
+    return x <= y ? makeWord(1) : nil;
+}
+
+Value gtU(Value a, Value b) {
     uint16_t x = checkWord(">", a);
     uint16_t y = checkWord(">", b);
     if (x > y)
@@ -132,7 +248,7 @@ Value ltU(Value a, Value b) {
     return nil;
 }
 
-Value ltS(Value a, Value b) {
+Value gtS(Value a, Value b) {
     int16_t x = checkWordS(">>", a);
     int16_t y = checkWordS(">>", b);
     if (x > y)
@@ -140,4 +256,105 @@ Value ltS(Value a, Value b) {
     return nil;
 }
 
+Value gtF(Value a, Value b) {
+    double x = getDouble(">>>", a);
+    double y = getDouble(">>>", b);
+    return x > y ? makeWord(1) : nil;
+}
 
+Value gteU(Value a, Value b) {
+    uint16_t x = checkWord(">=", a);
+    uint16_t y = checkWord(">=", b);
+    if (x >= y)
+        return makeWord(1);
+    return nil;
+}
+
+Value gteS(Value a, Value b) {
+    int16_t x = checkWordS(">=>=", a);
+    int16_t y = checkWordS(">=>=", b);
+    if (x >= y)
+        return makeWord(1);
+    return nil;
+}
+
+Value gteF(Value a, Value b) {
+    double x = getDouble(">=>=>=", a);
+    double y = getDouble(">=>=>=", b);
+    return x >= y ? makeWord(1) : nil;
+}
+
+Value eqU(Value a, Value b) {
+    uint16_t x = checkWord("=", a);
+    uint16_t y = checkWord("=", b);
+    if (x == y)
+        return makeWord(1);
+    return nil;
+}
+
+Value eqS(Value a, Value b) {
+    int16_t x = checkWordS("==", a);
+    int16_t y = checkWordS("==", b);
+    if (x == y)
+        return makeWord(1);
+    return nil;
+}
+
+Value eqF(Value a, Value b) {
+    double x = getDouble("===", a);
+    double y = getDouble("===", b);
+    return x == y ? makeWord(1) : nil;
+}
+
+Value neqU(Value a, Value b) {
+    uint16_t x = checkWord("<>", a);
+    uint16_t y = checkWord("<>", b);
+    if (x != y)
+        return makeWord(1);
+    return nil;
+}
+
+Value neqS(Value a, Value b) {
+    int16_t x = checkWordS("<><>", a);
+    int16_t y = checkWordS("<><>", b);
+    if (x != y)
+        return makeWord(1);
+    return nil;
+}
+
+Value neqF(Value a, Value b) {
+    double x = getDouble("<><><>", a);
+    double y = getDouble("<><><>", b);
+    return x != y ? makeWord(1) : nil;
+}
+
+
+Value remU(Value a, Value b) {
+    uint16_t x = checkWord("%", a);
+    uint16_t y = checkWord("%", b);
+    return makeWord(x % y);
+}
+
+Value remS(Value a, Value b) {
+    int16_t x = checkWordS("%%", a);
+    int16_t y = checkWordS("%%", b);
+    return makeWord(x % y);
+}
+
+Value not(Value x) {
+    if (x == nil)
+        return makeWord(1);
+    return nil;
+}
+
+Value cons(Value x, Value y) {
+    return makePair(x, y);
+}
+
+Value haus(Value p) {
+    return getPair("haus", p)->first;
+}
+
+Value hali(Value p) {
+    return getPair("hali", p)->second;
+}

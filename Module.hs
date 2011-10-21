@@ -7,6 +7,10 @@ module Module (
 import Control.Applicative
 import Control.Arrow ((***), first)
 import Control.Monad (join, when, forM_)
+import Control.Monad.State (StateT, MonadState(..), 
+                            evalStateT, execStateT, modify, gets, put)
+import Control.Monad.Trans (lift)
+
 import Data.Function (on)
 import Data.List (groupBy, sort, sortBy, union, intercalate)
 import Data.Map (Map)
@@ -123,13 +127,12 @@ plus loc ignoreClashes (CM _ x) (CM _ y) =
             compileError noSpan $ 
                 "The following names were exported from both sides of a module sum:"
                 : errLines
-             
-compose loc (CM _ x) (CM _ y) = CM (sourceModule loc) <$> T.mapM (resolveImportsWith y) x
+compose loc (CM _ x) (CM _ y) = runResolve $ CM (sourceModule loc) <$> T.mapM (resolveImportsWith y) x
 combine loc x y = (flip (plus loc True) y) =<< compose loc x y
 andModule loc x y = iterateModule loc =<< plus loc False x y
 
 iterateModule :: SrcSpan -> CompiledModule -> Compiler CompiledModule
-iterateModule loc (CM _ x) = context $ CM (sourceModule loc) <$> T.forM x resolve
+iterateModule loc (CM _ x) = context . runResolve $ CM (sourceModule loc) <$> T.forM x resolve
     where
         context = withErrorContext $ "When iterating the module at " ++ show loc
     
@@ -138,7 +141,7 @@ iterateModule loc (CM _ x) = context $ CM (sourceModule loc) <$> T.forM x resolv
         resolve x = return x
         
         resolveChain src seen (ReCE n@(L loc name))
-            | name `elem` map unLoc seen = compileError loc $
+            | name `elem` map unLoc seen = lift $ compileError loc $
                 "Re-export cycle detected during module iteration: "
                 : showCycle (head seen : reverse seen)
             | otherwise = case M.lookup name x of
@@ -150,14 +153,32 @@ iterateModule loc (CM _ x) = context $ CM (sourceModule loc) <$> T.forM x resolv
                 
         showCycle xs = [ "  " ++ unLoc name ++ atLoc name | name <- xs ]
 
-resolveFunWith :: Map Name CompiledExport -> FunID -> Compiler FunID
-resolveFunWith src funID = do
-    CompiledFunction arity locals ir <- retrieveFunction funID
-    ir' <- resolveIR src ir
-    defineFunction
-        (CompiledFunction arity locals ir')
+type Resolve a = StateT ResolveState Compiler a
+type ResolveState = Map FunID FunID
 
-resolveIR :: Map Name CompiledExport -> [Instruction Int] -> Compiler [Instruction Int]
+runResolve :: Resolve a -> Compiler a
+runResolve x = evalStateT x M.empty
+
+resolveImportsWith :: Map Name CompiledExport -> CompiledExport -> Resolve CompiledExport
+resolveImportsWith src (FunCE funID) = FunCE <$> resolveFunWith src funID
+resolveImportsWith src r@(ReCE (L _ name)) = case M.lookup name src of
+    Just y -> return y
+    Nothing -> return r
+resolveImportsWith _ x = return x
+
+resolveFunWith :: Map Name CompiledExport -> FunID -> Resolve FunID
+resolveFunWith src funID = 
+    gets (M.lookup funID) >>= \x -> case x of
+        Just funID' -> return funID'
+        Nothing -> do
+            CompiledFunction arity locals ir <- lift $ retrieveFunction funID
+            funID' <- lift $ createFunction
+            modify (M.insert funID funID')
+            ir' <- resolveIR src ir
+            lift $ defineFunction' funID' (CompiledFunction arity locals ir')
+            return funID'
+
+resolveIR :: Map Name CompiledExport -> [Instruction Int] -> Resolve [Instruction Int]
 resolveIR src ir = mapM (modifyIRVarRefs vf ff) ir where
     vf r@(ImportedVar (L loc name)) = case M.lookup name src of
         Nothing -> return r
@@ -170,12 +191,12 @@ resolveIR src ir = mapM (modifyIRVarRefs vf ff) ir where
     ff r@(ImportedFun (L loc name) arity) = case M.lookup name src of
         Nothing -> return r
         Just (FunCE funID) -> do
-            CompiledFunction arity' _ _ <- retrieveFunction funID
-            when (arity /= arity') $
+            CompiledFunction arity' _ _ <- lift $ retrieveFunction funID
+            when (arity /= arity') $ 
                 compileError loc [
                     "Resolving " ++ name ++ ": expected a function of arity " ++ show arity 
                     ++ "; found a function of arity " ++ show arity']
-            return $ ResolvedFun funID
+            ff $ ResolvedFun funID
         Just (VarCE _) -> compileError loc ["Resolving name '" ++ name ++ "': expected a function, found a variable"]
         Just (ReCE name') -> return $ ImportedFun name' arity
         Just (NativeCE nf@(NativeFunction _ _ arity')) -> if arity == arity'
@@ -184,18 +205,8 @@ resolveIR src ir = mapM (modifyIRVarRefs vf ff) ir where
                     "Resolving " ++ name ++ ": expected a function of arity " ++ show arity 
                     ++ "; found a native function of arity " ++ show arity']
 
+    ff (ResolvedFun funID) = ResolvedFun <$> resolveFunWith src funID
     ff r = return r
-
-resolveImportsWith :: Map Name CompiledExport -> CompiledExport -> Compiler CompiledExport
-resolveImportsWith src (FunCE funID) = do
-    CompiledFunction arity locals ir <- retrieveFunction funID
-    ir' <- resolveIR src ir
-    FunCE <$> defineFunction
-        (CompiledFunction arity locals ir')
-resolveImportsWith src (ReCE (L loc name)) = return $ case M.lookup name src of
-    Just e -> e
-    Nothing -> ReCE (L loc name)
-resolveImportsWith src x = return x
 
 compileModule :: ModuleExpr -> Compiler CompiledModule
 compileModule (CodeM loc m) = compileCodeModule loc m

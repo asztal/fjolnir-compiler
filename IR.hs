@@ -151,8 +151,7 @@ generateIR output expr = case expr of
     NilE -> do
         write $ NilI output
     WordE w -> write $ WordI output w
-    StrE s -> write $ StringI output 
-        (map (chr . fromIntegral) (Data.Array.Unboxed.elems s))
+    StrE s -> write $ StringI output s
     RealE r -> write $ RealI output r
     
     FunE f arity ->

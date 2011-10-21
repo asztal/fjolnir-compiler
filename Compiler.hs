@@ -16,7 +16,7 @@ module Compiler
     , defineGlobalModule
     , defineModuleVariable
     , defineEntryPoint
-    , defineFunction
+    , defineFunction, createFunction, defineFunction'
     , findUsedFunsAndVars
     
     , getEntryPoints
@@ -106,7 +106,7 @@ instance Show CompilerError where
             then show loc ++ ":\n" else "Compilation error:\n")
         ++ unlines (map ("  " ++) (msg ++ map ("  "++) (reverse ctxs)))
 
-withErrorContext :: String -> Compiler a -> Compiler a
+withErrorContext :: MonadError CompilerError m => String -> m a -> m a
 withErrorContext ctx action = action `catchError` addCtx where
     addCtx (CompilerError loc msg ctxs) = throwError $ CompilerError loc msg (ctx:ctxs)
 
@@ -188,13 +188,20 @@ defineModuleVariable name m = do
     mvs <- gets csModuleVariables
     modify $ \cs -> cs { csModuleVariables =
         M.insert name m (csModuleVariables cs) }
+        
+    when (name == "debug") $ do
+        let CM loc exports = m
+        debugMessage $ "Debugging module " ++ show loc ++ ":"
+        debugMessage $ "Exports:"
+        forM_ (M.toList exports) $ \(name, export) -> do
+            debugMessage $ "  " ++ name
 
 defineGlobalModule :: Name -> CompiledModule -> Compiler ()
 defineGlobalModule name m = do
     writeModule (name `addExtension` "ein") m
     
     modify $ \cs -> cs 
-        { csGlobalModules = M.update (const (Just (Just m))) name (csGlobalModules cs)
+        { csGlobalModules = M.insert name (Just m) (csGlobalModules cs)
         , csNewModules = S.insert name (csNewModules cs)
         }
 
@@ -338,6 +345,13 @@ defineFunction fun = do
     funID <- newFunID
     modify $ \cs -> cs { csFunctions = M.insert funID fun (csFunctions cs) }
     return funID  
+
+createFunction :: Compiler FunID
+createFunction = newFunID
+
+defineFunction' :: FunID -> CompiledFunction -> Compiler ()
+defineFunction' funID fun = do
+    modify $ \cs -> cs { csFunctions = M.insert funID fun (csFunctions cs) }
 
 -- Parsing -------------------------------------------------------------
 
