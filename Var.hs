@@ -1,4 +1,4 @@
-{-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE TemplateHaskell, GeneralizedNewtypeDeriving #-}
 
 module Var
     ( VarID(..)
@@ -8,18 +8,16 @@ module Var
     , NativeFunction(..)
     ) where
 
+import Data.Binary
 import DeriveBinary
 import Types
 
 newtype VarID = VarID Int
-    deriving (Eq, Ord, Show)
+    deriving (Eq, Ord, Show, Binary)
     
 newtype FunID = FunID Int
-    deriving (Eq, Ord, Show)
+    deriving (Eq, Ord, Show, Binary)
     
-deriveBinary ''VarID
-deriveBinary ''FunID
-
 data Var
     = LocalVar Int
     | ArgVar Int

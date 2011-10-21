@@ -52,7 +52,7 @@ deriveBinary ty = do
                 [ bindS (varP selector) selE
                 , noBindS $ caseE
                     (varE selector) 
-                    (map (uncurry matcher) (zip [0..] cons))]
+                    ((map (uncurry matcher) (zip [0..] cons)) ++ [failer])]
             where
                 matcher conIndex (NormalC conName types) = do
                     names <- replicateM (length types) (newName "a")
@@ -64,6 +64,8 @@ deriveBinary ty = do
                         (litP (IntegerL conIndex)) 
                         (normalB body)
                         []
+                        
+                failer = match wildP (normalB [|fail "Binary file in incorrect format"|]) []
     
     typeInfo :: Dec -> (Name, [Name], [Con])
     typeInfo (DataD _ name typeVars cons _) = (name, map tvName typeVars, cons)
