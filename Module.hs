@@ -132,20 +132,18 @@ combine loc x y = (flip (plus loc True) y) =<< compose loc x y
 andModule loc x y = iterateModule loc =<< plus loc False x y
 
 iterateModule :: SrcSpan -> CompiledModule -> Compiler CompiledModule
-iterateModule loc (CM _ x) = context . runResolve $ CM (sourceModule loc) <$> T.forM x resolve
-    where
-        context = withErrorContext $ "When iterating the module at " ++ show loc
-    
+iterateModule loc (CM _ x) = runResolve $ CM (sourceModule loc) <$> T.forM x resolve
+    where    
         resolve (FunCE funID) = FunCE <$> resolveFunWith x funID
-        resolve r@(ReCE (L loc name)) = resolveChain x [] r
+        resolve r@(ReCE _) = resolveChain x [] r
         resolve x = return x
         
         resolveChain src seen (ReCE n@(L loc name))
-            | name `elem` map unLoc seen = lift $ compileError loc $
+            | n `elem` seen = lift $ compileError loc $
                 "Re-export cycle detected during module iteration: "
                 : showCycle (head seen : reverse seen)
             | otherwise = case M.lookup name x of
-                Just r@(ReCE n@(L loc' name')) -> 
+                Just r@(ReCE (L loc' name')) -> 
                     resolveChain src (n : seen) r
                 Just e -> return e
                 Nothing -> return $ ReCE (L loc name)

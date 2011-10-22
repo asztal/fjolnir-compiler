@@ -189,12 +189,7 @@ defineModuleVariable name m = do
     modify $ \cs -> cs { csModuleVariables =
         M.insert name m (csModuleVariables cs) }
         
-    when (name == "debug") $ do
-        let CM loc exports = m
-        debugMessage $ "Debugging module " ++ show loc ++ ":"
-        debugMessage $ "Exports:"
-        forM_ (M.toList exports) $ \(name, export) -> do
-            debugMessage $ "  " ++ name
+    when (name == "debug") $ debugModule name m 
 
 defineGlobalModule :: Name -> CompiledModule -> Compiler ()
 defineGlobalModule name m = do
@@ -370,6 +365,24 @@ parseProgram path = do
             "or" "unknown parse error" "expecting" "unexpected" "end of file"
             (errorMessages e)
 
+-- Debugging -----------------------------------------------------------
+
+debugModule :: ModuleName -> CompiledModule -> Compiler ()
+debugModule name (CM loc exports) = do
+    debugMessage $ "Debugging module at " ++ show loc ++ ":"
+    forM_ (M.toList exports) $ \(name, export) -> do
+        descr <- case export of
+            ReCE (L _ name) -> return name
+            VarCE varID -> return $ show varID
+            FunCE funID -> do
+                CompiledFunction arity locals ir <- retrieveFunction funID
+                return $ unlines $ 
+                    ("stef " ++ show arity) : map showInstr (zip [0..] ir)  
+            NativeCE nf -> return $ show nf
+                
+        debugMessage $ "  " ++ name ++ " -> " ++ descr 
+    where
+        showInstr (i,x) = "    " ++ show i ++ ": " ++ show x 
 
 ---- This has to be quite far down, as apparently you can't define types
 ---- after splicing in top-level declarations with Template Haskell. 
