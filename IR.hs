@@ -123,8 +123,7 @@ runGenIR :: (forall s. GenIR s ()) -> [Instruction Int]
 runGenIR x = runST (do
     end <- Label <$> newSTRef (-1)
     gs <- execStateT
-        (unGenIR (do
-            rv <- stackVar
+        (unGenIR (withStackVar $ \rv -> do
             modify $ \gs -> gs { gsRetVal = rv }
             x
             defineLabel end))
@@ -162,59 +161,59 @@ generateIR output expr = case expr of
         generateIR v e
         write $ AssignI output v
     
-    AppE (Left v) rs xs -> do
+    AppE (Left v) rs xs -> withManyStackVars $ do
         rs' <- mapM evalRefArg rs
         xs' <- mapM evalValArg xs
         write $ CallVI output v rs' xs'
     
-    -- TODO: Check arity is correct.
-    AppE (Right f) rs xs -> do
+    -- Cannot check that arity is correct here as 'f' may not even have
+    -- been resolved (could still be ImportedVar).
+    AppE (Right f) rs xs -> withManyStackVars $ do
         rs' <- mapM evalRefArg rs
         xs' <- mapM evalValArg xs
         write $ CallI output f rs' xs'
         
-    ManyE xs -> do
-        mapM_ (generateIR output) xs
+    ManyE xs -> mapM_ (generateIR output) xs
     
     AndE x y -> do
-        x' <- stackVar
-        generateIR x' x
         end <- label
         success <- label
         tryY <- label
         
-        write $ ConditionalI x' tryY
-        write $ NilI output
-        jmp end
+        withValueOf x $ \x' -> do
+            write $ ConditionalI x' tryY
+            write $ NilI output
+            jmp end
         
         defineLabel tryY
-        y' <- stackVar
-        generateIR y' y
-        write $ ConditionalI y' success
-        write $ NilI output
-        jmp end
-        
-        defineLabel success
-        write $ AssignI output y'
-        defineLabel end
+        withValueOf y $ \y' -> do
+            write $ ConditionalI y' success
+            write $ NilI output
+            jmp end
+            
+            defineLabel success
+            write $ AssignI output y'
+            defineLabel end
 
     OrE x y -> do
-        x' <- stackVar
+        notDone <- label
         done <- label
         end <- label
-        generateIR x' x
-        write $ ConditionalI x' done
+        
+        withValueOf x $ \x' -> do
+            write $ ConditionalI x' done
+            write $ JumpI notDone
+            defineLabel done
+            write $ AssignI output x'
+            jmp end
+
+        defineLabel notDone
         generateIR output y
-        jmp end
-        defineLabel done
-        write $ AssignI output x'
         defineLabel end
         
-    NotE x -> do
-        x' <- stackVar
+    NotE x -> withValueOf x $ \x' -> do
         done <- label
         end <- label
-        generateIR x' x
         write $ ConditionalI x' done
         write $ WordI output 1
         jmp end
@@ -245,11 +244,12 @@ generateIR output expr = case expr of
         jmp end
             
     IfE cond x y -> do
-        cond' <- stackVar
         condTrue <- label
         end <- label
-        generateIR cond' cond
-        write $ ConditionalI cond' condTrue
+
+        withValueOf cond $ \cond' -> do 
+            write $ ConditionalI cond' condTrue
+        
         generateIR output y
         jmp end 
         defineLabel condTrue
@@ -257,19 +257,18 @@ generateIR output expr = case expr of
         defineLabel end  
         
     CaseE scrutinee branches defaultBranch -> do
-        scrutinee' <- stackVar
-        generateIR scrutinee' scrutinee
-        
         defaultBranchLabel <- label
         end <- label
+
         labels <- forM branches (\branch -> (,) <$> label <*> pure branch)
-        
-        -- Emit the code that selects the correct branch.
-        ir <- stackVar
-        forM_ labels $ \(branchLabel, (ranges, _)) -> do
-            forM_ ranges $ \(low, high) -> do
-                write $ InRangeI ir scrutinee' low high
-                write $ ConditionalI ir branchLabel
+
+        withValueOf scrutinee $ \scrutinee' -> do
+            withStackVar $ \ir -> do                
+                -- Emit the code that selects the correct branch.
+                forM_ labels $ \(branchLabel, (ranges, _)) -> do
+                    forM_ ranges $ \(low, high) -> do
+                        write $ InRangeI ir scrutinee' low high
+                        write $ ConditionalI ir branchLabel
         
         jmp defaultBranchLabel
         
@@ -292,7 +291,7 @@ generateIR output expr = case expr of
             generateIR x arg
             evalRefArg (Right x)
         
-        evalValArg :: Exp Var Fun -> GenIR s Var 
+        evalValArg :: Exp Var Fun -> GenIR s Var
         evalValArg arg = do
             x <- stackVar
             generateIR x arg
@@ -311,12 +310,32 @@ label = GenIR . lift $ (Label <$> newSTRef (-1))
 
 jmp :: Label s -> GenIR s ()
 jmp l = write $ JumpI l
+    
+withStackVar :: (Var -> GenIR s a) -> GenIR s a
+withStackVar f = do
+    i <- gets gsStackIndex
+    modify $ \gs -> gs { gsStackIndex = succ i }
+    r <- f (StackVar i)
+    modify $ \gs -> gs { gsStackIndex = i }
+    return r
+
+withValueOf :: Exp Var Fun -> (Var -> GenIR s a) -> GenIR s a
+withValueOf (ReadE v) f = f v
+withValueOf (WriteE v x) f = generateIR v x >> f v
+withValueOf x f = withStackVar (\v -> generateIR v x >> f v)
 
 stackVar :: GenIR s Var
 stackVar = do
     i <- gets gsStackIndex
     modify $ \gs -> gs { gsStackIndex = succ i }
-    return $ StackVar i
+    return (StackVar i)
+
+withManyStackVars :: GenIR s a -> GenIR s a
+withManyStackVars x = do
+    i <- gets gsStackIndex
+    r <- x
+    modify $ \gs -> gs { gsStackIndex = i }
+    return r
 
 retVal :: GenIR s Var
 retVal = gets gsRetVal
