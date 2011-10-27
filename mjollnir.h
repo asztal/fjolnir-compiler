@@ -27,13 +27,19 @@ typedef struct pair {
     Value second;
 } pair;
 
+typedef struct array {
+    uintptr_t size;
+    Value *data;
+} array;
+
 #define T_NIL 0
 #define T_WORD 1    // 16-bit word
 #define T_REAL 2
 #define T_STRING 3
 #define T_PAIR 4
 #define T_STEF 5
-#define T_OTHER 6
+#define T_ARRAY 6
+#define T_OTHER 7
 
 Value makeStef(void* fun, int rv, int v);
 void* loadStef(Value stef, int m, int n);

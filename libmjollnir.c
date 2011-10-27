@@ -16,7 +16,7 @@ static void checkMalloc(void *x) {
 
 static void checkType(const char *fn, Value x, uintptr_t type) {
     static const char* typeNames[] = {
-        "nil", "word", "real", "string", "pair", "stef", "other (unknown)", "garbage"
+        "nil", "word", "real", "string", "pair", "stef", "array", "other (unknown)"
     };
     
     if(whatThing(x) != type) {
@@ -49,6 +49,11 @@ static double getDouble(const char* fn, Value x) {
 static pair* getPair(const char *fn, Value x) {
     checkType(fn, x, T_PAIR);
     return getThing(pair, x);
+}
+
+static array* getArray(const char *fn, Value x) {
+    checkType(fn, x, T_ARRAY);
+    return getThing(array, x);
 }
 
 // Primitives
@@ -357,4 +362,43 @@ Value haus(Value p) {
 
 Value hali(Value p) {
     return getPair("hali", p)->second;
+}
+
+// Arrays
+Value hlunkur(Value vn) {
+    uint16_t i, n = checkWord("hlunkur", vn);
+    array *arr = GC_malloc(sizeof(array));
+    checkMalloc(arr);
+    arr->size = n;
+    arr->data = GC_malloc(sizeof(Value) * n);
+    checkMalloc(arr->data);
+    for(i = 0; i < n; ++i)
+        arr->data[i] = nil;
+    return makeThing(arr, T_ARRAY);
+}
+
+Value hlunkstaerd (Value a) {
+    array *arr = getArray("hlunkstærð", a);
+    return arr->size;
+}
+
+Value hlunksaekja (Value an, Value in) {
+    array *a = getArray("hlunksækja", an);
+    uint16_t i = checkWord("hlunksækja", in);
+    
+    if (i >= a->size)
+        return nil;
+    
+    return a->data[i];
+}
+
+Value hlunksetja (Value an, Value in, Value x) {
+    array *a = getArray("hlunksetja", an);
+    uint16_t i = checkWord("hlunksetja", in);
+    
+    if (i >= a->size)
+        // TODO: Grow the array.
+        return x;
+    
+    return a->data[i] = x;
 }
