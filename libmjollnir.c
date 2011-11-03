@@ -51,6 +51,11 @@ static pair* getPair(const char *fn, Value x) {
     return getThing(pair, x);
 }
 
+static string* getString(const char *fn, Value x) {
+    checkType(fn, x, T_STRING);
+    return getThing(string, x);
+}
+
 static array* getArray(const char *fn, Value x) {
     checkType(fn, x, T_ARRAY);
     return getThing(array, x);
@@ -87,15 +92,24 @@ Value makeReal(double d) {
     return makeThing(r, T_REAL);
 }
 
+// TODO: According to the fjölnir manual, all strings
+// in fjölnir have a power-of-two length.
 Value makeString(const char *str) {
     uintptr_t len = strlen(str);
-    string *s = GC_MALLOC(sizeof(string) + len + 1);
+    string *s = GC_MALLOC(sizeof(string) + 1 + len + 1);
     checkMalloc(s);
-    s->length = len;
-    strcpy(s->data, str);
+    s->length = len + 1;
+    // Why Fjölnir does things this way I will never know.
+    s->data[0] = len;
+    strcpy(s->data + 1, str);
     return makeThing(s, T_STRING);
 }
-
+// TODO: After taking a closer look at the manual,
+// it appears that pairs are not actually separate
+// from any other data structures... they are actually
+// just arrays with only two elements.
+//    erpar(\hlunkur 2) = 1
+//    erhlunkur(1 : 2) = 1
 Value makePair(Value x, Value y) {
     pair *p = GC_MALLOC(sizeof(pair));
     checkMalloc(p);
@@ -105,6 +119,14 @@ Value makePair(Value x, Value y) {
 }
 
 // Library functions
+
+Value staekka(Value x) {
+    return makeWord(checkWord("stækka", x) + 1);
+}
+
+Value minnka(Value x) {
+    return makeWord(checkWord("minnka", x) - 1);
+}
 
 Value newLine () {
     putchar('\n');
@@ -364,7 +386,32 @@ Value hali(Value p) {
     return getPair("hali", p)->second;
 }
 
+// Strings
+
+Value strengsetjabaeti(Value vs, Value vi, Value vx) {
+    string* s = getString("strengsetjabæti", vs);
+    uint16_t i = checkWord("strengsetjabæti", vi);
+    uint16_t x = checkWord("strengsetjabæti", vx);
+    if (i < s->length)
+        s->data[i] = x;
+    return nil;
+}
+
+Value strengsaekjabaeti(Value vs, Value vi) {
+    string* s = getString("strengsækjabæti", vs);
+    uint16_t i = checkWord("strengsækjabæti", vi);
+    if (i < s->length)
+        return makeWord(s->data[i]);
+    return nil;
+}
+
+Value strengstaerd(Value vs) {
+    return makeWord(getString("strengstaerd", vs)->length);
+}
+
 // Arrays
+
+// TODO: the manual says arrays can only contain at most 1024 values.
 Value hlunkur(Value vn) {
     uint16_t i, n = checkWord("hlunkur", vn);
     array *arr = GC_malloc(sizeof(array));
@@ -401,4 +448,10 @@ Value hlunksetja (Value an, Value in, Value x) {
         return x;
     
     return a->data[i] = x;
+}
+
+// System functions
+Value haetta(Value vx) {
+    uint16_t x = checkWord("hætta", vx);
+    exit(x);
 }

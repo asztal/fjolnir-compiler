@@ -19,7 +19,7 @@ typedef struct stef {
 
 typedef struct string {
     uintptr_t length;
-    char data[0];
+    unsigned char data[0];
 } string;
 
 typedef struct pair {
